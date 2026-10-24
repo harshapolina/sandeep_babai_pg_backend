@@ -226,28 +226,33 @@ router.get(
 
     const page = Math.max(1, Number(req.query.page) || 1);
     const limit = Math.min(50, Number(req.query.limit) || 20);
+    const orgId = req.auth.organizationId;
 
-    const [items, total, statusCounts] = await Promise.all([
-      MaintenanceTicket.find(query)
-        .populate('tenant', 'fullName phone')
-        .populate('property', 'name')
-        .populate('assignedTo', 'fullName')
-        .populate('room', 'roomNumber')
-        .sort({ createdAt: -1 })
-        .skip((page - 1) * limit)
-        .limit(limit),
-      MaintenanceTicket.countDocuments(query),
-      MaintenanceTicket.aggregate([
-        { $match: { organization: req.auth.organizationId } },
-        { $group: { _id: '$status', count: { $sum: 1 } } },
-      ]),
+    const itemsPromise = MaintenanceTicket.find(query)
+      .select(
+        'ticketNumber title description category priority status tenant property room assignedTo createdAt updatedAt'
+      )
+      .populate('tenant', 'fullName')
+      .populate('property', 'name')
+      .populate('assignedTo', 'fullName')
+      .populate('room', 'roomNumber')
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .lean();
+
+    const countsPromise = MaintenanceTicket.aggregate([
+      { $match: { organization: orgId } },
+      { $group: { _id: '$status', count: { $sum: 1 } } },
     ]);
+
+    const [items, statusCounts] = await Promise.all([itemsPromise, countsPromise]);
 
     res.json({
       success: true,
       data: items,
       statusCounts: Object.fromEntries(statusCounts.map((s) => [s._id, s.count])),
-      pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+      pagination: { page, limit, total: items.length, pages: page },
     });
   })
 );
@@ -264,15 +269,19 @@ router.get(
       .populate('property', 'name')
       .populate('room', 'roomNumber')
       .populate('bed', 'bedNumber')
-      .populate('assignedTo', 'fullName role');
+      .populate('assignedTo', 'fullName role')
+      .lean();
 
     if (!ticket) throw new AppError('Ticket not found', 404);
-    assertPropertyAccess(req, ticket.property._id || ticket.property);
+    assertPropertyAccess(req, ticket.property?._id || ticket.property);
 
-    const comments = await TicketComment.find({ ticket: ticket._id })
-      .populate('author', 'fullName role')
-      .sort({ createdAt: 1 });
-    const attachments = await TicketAttachment.find({ ticket: ticket._id });
+    const [comments, attachments] = await Promise.all([
+      TicketComment.find({ ticket: ticket._id })
+        .populate('author', 'fullName role')
+        .sort({ createdAt: 1 })
+        .lean(),
+      TicketAttachment.find({ ticket: ticket._id }).select('fileName mimeType createdAt').lean(),
+    ]);
 
     res.json({ success: true, data: { ticket, comments, attachments } });
   })
