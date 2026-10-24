@@ -36,18 +36,57 @@ router.post(
       throw new AppError('Invalid email or password', 401);
     }
     if (!user.isActive) throw new AppError('Account is inactive', 403);
+    if (user.role === 'tenant') {
+      throw new AppError(
+        'Tenants sign in with email only at the tenant login page',
+        403
+      );
+    }
 
     user.lastLoginAt = new Date();
     await user.save();
 
     const token = signToken(user);
-    let tenantProfile = null;
-    if (user.role === 'tenant') {
-      tenantProfile = await Tenant.findOne({ user: user._id })
-        .populate('property', 'name address')
-        .lean();
+
+    res.json({
+      success: true,
+      token,
+      user: user.toSafeJSON(),
+      tenant: null,
+    });
+  })
+);
+
+/** Tenant passwordless login — email only */
+router.post(
+  '/tenant-login',
+  body('email').isEmail().normalizeEmail(),
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      throw new AppError('Enter a valid email', 400, errors.array());
     }
 
+    const email = String(req.body.email || '')
+      .trim()
+      .toLowerCase();
+    const user = await User.findOne({ email, role: 'tenant' });
+    if (!user) {
+      throw new AppError('No tenant account found for this email', 404);
+    }
+    if (!user.isActive) throw new AppError('Account is inactive', 403);
+
+    const tenantProfile = await Tenant.findOne({ user: user._id })
+      .populate('property', 'name address')
+      .lean();
+    if (!tenantProfile) {
+      throw new AppError('Tenant profile not found', 404);
+    }
+
+    user.lastLoginAt = new Date();
+    await user.save();
+
+    const token = signToken(user);
     res.json({
       success: true,
       token,
