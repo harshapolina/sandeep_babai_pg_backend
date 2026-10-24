@@ -3,12 +3,9 @@ const fs = require('fs');
 const multer = require('multer');
 const crypto = require('crypto');
 
-const uploadRoot = path.join(
-  __dirname,
-  '..',
-  '..',
-  process.env.UPLOAD_DIR || 'uploads'
-);
+const uploadRoot = process.env.VERCEL
+  ? path.join('/tmp', process.env.UPLOAD_DIR || 'uploads')
+  : path.join(__dirname, '..', '..', process.env.UPLOAD_DIR || 'uploads');
 
 ['private', 'temp'].forEach((dir) => {
   const full = path.join(uploadRoot, dir);

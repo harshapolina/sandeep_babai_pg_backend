@@ -32,10 +32,24 @@ const { reindexAll } = require('./services/ragIndexService');
 const fs = require('fs');
 
 const app = express();
+const isVercel = Boolean(process.env.VERCEL);
+
+function corsOrigin(origin, cb) {
+  const raw = process.env.CLIENT_URL || 'http://localhost:5173';
+  const allowed = raw.split(',').map((s) => s.trim()).filter(Boolean);
+  if (!origin || allowed.includes('*') || allowed.includes(origin)) {
+    return cb(null, true);
+  }
+  // Allow Vercel preview deployments of the frontend project
+  if (/^https:\/\/[\w.-]+\.vercel\.app$/.test(origin)) {
+    return cb(null, true);
+  }
+  return cb(null, false);
+}
 
 app.use(
   cors({
-    origin: process.env.CLIENT_URL || 'http://localhost:5173',
+    origin: corsOrigin,
     credentials: true,
   })
 );
@@ -58,7 +72,7 @@ app.use(
 app.get('/api/health', (req, res) => {
   res.json({
     success: true,
-    service: 'pg-management-api',
+    service: 'has-tracker-api',
     emailConfigured: process.env.EMAIL_ENABLED === 'true',
     time: new Date().toISOString(),
   });
@@ -80,7 +94,6 @@ app.use('/api/tenant-portal', tenantPortalRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/chat', chatRoutes);
 
-// Private file access — authenticated only
 app.get(
   '/api/files/:key',
   authenticate,
@@ -97,39 +110,40 @@ app.get(
 app.use(notFound);
 app.use(errorHandler);
 
-const PORT = process.env.PORT || 5000;
+async function startLocal() {
+  const PORT = process.env.PORT || 5000;
+  await connectDB();
+  app.listen(PORT, () => {
+    console.log(`API running on http://localhost:${PORT}`);
+    if (process.env.EMAIL_ENABLED !== 'true') {
+      console.log(
+        'Email notifications: DISABLED (set EMAIL_ENABLED=true and SMTP_* to enable)'
+      );
+    }
+  });
 
-connectDB()
-  .then(() => {
-    app.listen(PORT, () => {
-      console.log(`API running on http://localhost:${PORT}`);
-      if (process.env.EMAIL_ENABLED !== 'true') {
-        console.log(
-          'Email notifications: DISABLED (set EMAIL_ENABLED=true and SMTP_* to enable)'
-        );
-      }
-    });
+  const runIndex = () =>
+    reindexAll()
+      .then((r) => {
+        if (!r.skipped) {
+          console.log(
+            `RAG index refreshed: ${(r.results || [])
+              .map((x) => `${x.org}(${x.chunks})`)
+              .join(', ')}`
+          );
+        }
+      })
+      .catch((err) => console.warn('RAG reindex failed:', err.message));
 
-    // Self-train RAG knowledge from live DB on boot + every 10 minutes
-    const runIndex = () =>
-      reindexAll()
-        .then((r) => {
-          if (!r.skipped) {
-            console.log(
-              `RAG index refreshed: ${(r.results || [])
-                .map((x) => `${x.org}(${x.chunks})`)
-                .join(', ')}`
-            );
-          }
-        })
-        .catch((err) => console.warn('RAG reindex failed:', err.message));
+  setTimeout(runIndex, 2500);
+  setInterval(runIndex, 10 * 60 * 1000);
+}
 
-    setTimeout(runIndex, 2500);
-    setInterval(runIndex, 10 * 60 * 1000);
-  })
-  .catch((err) => {
+if (!isVercel) {
+  startLocal().catch((err) => {
     console.error('Failed to start server:', err.message);
     process.exit(1);
   });
+}
 
 module.exports = app;

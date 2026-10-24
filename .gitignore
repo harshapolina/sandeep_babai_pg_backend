@@ -7,3 +7,5 @@ uploads/
 .DS_Store
 coverage/
 .tmp/
+
+.vercel
