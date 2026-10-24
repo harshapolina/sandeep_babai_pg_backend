@@ -1,5 +1,5 @@
 const express = require('express');
-const { Organization } = require('../models');
+const { Organization, Room, Bed, Property } = require('../models');
 const { asyncHandler } = require('../utils/asyncHandler');
 const { AppError } = require('../utils/AppError');
 const { authenticate, requireAdmin, requireStaff } = require('../middleware/auth');
@@ -8,6 +8,11 @@ const {
   sendEmail,
   getMailConfig,
 } = require('../services/emailService');
+const {
+  DEFAULT_SHARING_PRICES,
+  normalizeSharingPrices,
+  rentForSharing,
+} = require('../utils/sharingPrices');
 
 const router = express.Router();
 router.use(authenticate, requireStaff);
@@ -32,6 +37,7 @@ function publicSettings(org) {
       timezone: s.timezone || 'Asia/Kolkata',
       autoApproveRegistrations: s.autoApproveRegistrations !== false,
       ticketCategories: s.ticketCategories || [],
+      sharingPrices: normalizeSharingPrices(s.sharingPrices || DEFAULT_SHARING_PRICES),
       mail: {
         enabled: Boolean(mail.enabled),
         host: mail.host || '',
@@ -139,15 +145,64 @@ router.patch(
       }
     }
 
+    if (incoming.sharingPrices) {
+      org.settings.sharingPrices = normalizeSharingPrices(incoming.sharingPrices);
+    }
+
     org.markModified('settings');
     await org.save();
+
+    let applied = null;
+    if (incoming.applySharingPrices) {
+      applied = await applySharingPricesToInventory(org);
+    }
 
     const fresh = await Organization.findById(org._id).select(
       '+settings.mail.pass +settings.chatbot.apiKey'
     );
-    res.json({ success: true, data: publicSettings(fresh) });
+    res.json({
+      success: true,
+      data: publicSettings(fresh),
+      applied,
+      message: applied
+        ? `Prices saved. Updated ${applied.rooms} rooms and ${applied.beds} beds.`
+        : 'Settings saved',
+    });
   })
 );
+
+async function applySharingPricesToInventory(org) {
+  const orgId = org._id;
+  const rooms = await Room.find({ organization: orgId, isActive: { $ne: false } });
+  let roomCount = 0;
+  let bedCount = 0;
+
+  for (const room of rooms) {
+    const rent = rentForSharing(org, {
+      roomType: room.roomType,
+      capacity: room.capacity,
+    });
+    if (room.rentAmount !== rent) {
+      room.rentAmount = rent;
+      await room.save();
+      roomCount += 1;
+    }
+    const bedRes = await Bed.updateMany(
+      { organization: orgId, room: room._id, isActive: true },
+      { $set: { rentAmount: rent } }
+    );
+    bedCount += bedRes.modifiedCount || 0;
+  }
+
+  // Keep property default rent aligned to double-sharing price
+  const doubleRent = rentForSharing(org, { roomType: 'double', capacity: 2 });
+  await Property.updateMany(
+    { organization: orgId },
+    { $set: { defaultRentAmount: doubleRent } }
+  );
+
+  return { rooms: roomCount, beds: bedCount, defaultRentAmount: doubleRent };
+}
 
 router.post(
   '/mail/test',

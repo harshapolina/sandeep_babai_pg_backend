@@ -103,7 +103,7 @@ router.post(
       bedLabels,
     } = req.body;
 
-    if (!propertyId || !floorId || !roomNumber || capacity == null || rentAmount == null) {
+    if (!propertyId || !floorId || !roomNumber || capacity == null) {
       throw new AppError('Missing required room fields', 400);
     }
     const bedCount = Number(capacity);
@@ -119,15 +119,42 @@ router.post(
     });
     if (!floor) throw new AppError('Floor not found for property', 404);
 
+    const resolvedType =
+      roomType ||
+      (bedCount === 1
+        ? 'single'
+        : bedCount === 2
+          ? 'double'
+          : bedCount === 3
+            ? 'triple'
+            : bedCount === 4
+              ? 'quad'
+              : 'dorm');
+
+    const { Organization } = require('../models');
+    const { rentForSharing } = require('../utils/sharingPrices');
+    const org = await Organization.findById(req.auth.organizationId).lean();
+    const sharingRent = rentForSharing(org, {
+      roomType: resolvedType,
+      capacity: bedCount,
+    });
+    const finalRent =
+      rentAmount !== undefined && rentAmount !== null && rentAmount !== ''
+        ? Number(rentAmount)
+        : sharingRent;
+    if (!Number.isFinite(finalRent) || finalRent < 0) {
+      throw new AppError('Invalid rent amount', 400);
+    }
+
     const room = await Room.create({
       organization: req.auth.organizationId,
       property: propertyId,
       floor: floorId,
       roomNumber,
-      roomType: roomType || (bedCount === 1 ? 'single' : bedCount === 2 ? 'double' : 'triple'),
+      roomType: resolvedType,
       capacity: bedCount,
       rentType: rentType || 'per_bed',
-      rentAmount,
+      rentAmount: finalRent,
       description,
       amenities: amenities || [],
     });
@@ -143,7 +170,8 @@ router.post(
         bedNumber: String(i),
         label,
         status: 'available',
-        rentAmount: rentType === 'per_room' ? rentAmount / bedCount : rentAmount,
+        rentAmount:
+          rentType === 'per_room' ? finalRent / bedCount : finalRent,
       });
     }
     await Bed.insertMany(beds);

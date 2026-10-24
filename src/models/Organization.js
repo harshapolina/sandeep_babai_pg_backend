@@ -29,6 +29,15 @@ const organizationSchema = new mongoose.Schema(
           'Other',
         ],
       },
+      /** Per-bed monthly rent by sharing type (1/2/3/4+ sharing) */
+      sharingPrices: {
+        single: { type: Number, default: 15000, min: 0 },
+        double: { type: Number, default: 12000, min: 0 },
+        triple: { type: Number, default: 10000, min: 0 },
+        quad: { type: Number, default: 8000, min: 0 },
+        dorm: { type: Number, default: 6000, min: 0 },
+        other: { type: Number, default: 9000, min: 0 },
+      },
       mail: {
         enabled: { type: Boolean, default: false },
         host: { type: String, default: '' },
