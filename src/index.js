@@ -69,6 +69,15 @@ app.use(
   })
 );
 
+app.get('/', (req, res) => {
+  res.json({
+    success: true,
+    service: 'has-tracker-api',
+    message: 'Has Tracker API is running',
+    health: '/api/health',
+  });
+});
+
 app.get('/api/health', (req, res) => {
   res.json({
     success: true,
